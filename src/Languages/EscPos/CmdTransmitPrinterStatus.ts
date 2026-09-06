@@ -67,6 +67,45 @@ enum DrawerKickByte {
 //   ColorTwoNearEnd = 0x02,
 // }
 
+/**
+ * Check a single GS r reply byte against what the spec allows for the
+ * subcommand we asked about.
+ *
+ * Per the ESC/POS reference (as printed in the TM-T20 quick reference):
+ *
+ *     GS r n   Transmits status specified by n as 1 byte
+ *     n = 1, "1": Paper sensor status
+ *              Status = 0:  Paper end sensor: paper present
+ *              Status = 12: Paper end sensor: not present
+ *     n = 2, "2": Drawer kick-out connector status
+ *              Status = 0: Drawer kick-out connector pin 3: Low
+ *              Status = 1: Drawer kick-out connector pin 3: High
+ *
+ * Bits 4 and 7 are fixed 0 on every reply. Bits 5 and 6 are undefined, so they
+ * are deliberately not checked. Paper sensor bits travel in pairs (0/1 for
+ * near-end, 2/3 for end), and models without a near-end sensor report that
+ * pair as 0.
+ */
+function isValidStatusByte(byte: number, subcommand: TransmitPrinterStatusCmd): boolean {
+  // Bits 4 and 7 are fixed 0 for all GS r replies.
+  if ((byte & 0x90) !== 0) { return false; }
+
+  switch (subcommand) {
+    case 'PaperSensorStatus': {
+      // Each sensor reports through a pair of bits that must agree.
+      const nearEnd = byte & 0x03;
+      const end     = byte & 0x0c;
+      return (nearEnd === 0x00 || nearEnd === 0x03)
+          && (end     === 0x00 || end     === 0x0c);
+    }
+    case 'DrawerKickStatus':
+      // Only bit 0 carries meaning; bits 1-3 are fixed 0.
+      return (byte & 0x0e) === 0;
+    default:
+      return Util.exhaustiveMatchGuard(subcommand);
+  }
+}
+
 export function parseCmdTransmitPrinterStatus(
   msg: Uint8Array,
   cmd: Cmds.IPrinterCommand,
@@ -80,9 +119,9 @@ export function parseCmdTransmitPrinterStatus(
   }
   const result: Cmds.IMessageHandlerResult<Uint8Array> = {
     messageIncomplete: false,
-    messageMatchedExpectedCommand: true,
+    messageMatchedExpectedCommand: false,
     messages: [],
-    remainder: msg.slice(1)
+    remainder: msg
   }
 
   const command = (cmd as CmdTransmitPrinterStatus);
@@ -98,6 +137,23 @@ export function parseCmdTransmitPrinterStatus(
 
   // Each status is 1 byte.
   const byte = msg[0];
+  if (byte === undefined) {
+    result.messageIncomplete = true;
+    result.messageMatchedExpectedCommand = true;
+    return result;
+  }
+
+  // Validate before claiming the byte. GS r replies carry fixed bits, and a
+  // reply that doesn't match the subcommand we asked about is not ours - it
+  // may be the late reply to a different query, or a desynchronized stream.
+  // Claiming it unconditionally resolves the wrong awaiter with a fabricated
+  // status, which surfaces as phantom paper-out and drawer events.
+  if (!isValidStatusByte(byte, command.subcommand)) {
+    return result;
+  }
+
+  result.messageMatchedExpectedCommand = true;
+  result.remainder = msg.slice(1);
 
   switch (command.subcommand) {
     case 'PaperSensorStatus':
