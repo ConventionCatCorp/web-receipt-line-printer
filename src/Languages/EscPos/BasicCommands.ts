@@ -2,9 +2,22 @@ import * as Util from '../../Util/index.js';
 import * as Cmds from '../../Commands/index.js';
 import { codepageNumberForEscPos, codepageSwitchCmd } from './Codepages.js';
 
-/** Encode a single character, for readability of command sequences. */
-export function enc(char = '') {
-  return Cmds.asUint8Array(char)[0];
+/**
+ * Encode a single character, for readability of command sequences.
+ *
+ * Every call site passes a literal, so an empty or multi-character argument is
+ * a programming mistake rather than something to encode as a stray zero byte
+ * in the middle of a command.
+ */
+export function enc(char: string): number {
+  const encoded = Cmds.asUint8Array(char);
+  if (encoded.length !== 1 || encoded[0] === undefined) {
+    throw new Cmds.MessageParsingError(
+      `enc() expects exactly one character, got ${JSON.stringify(char)}.`,
+      char
+    );
+  }
+  return encoded[0];
 }
 
 export function testPrint(cmd: Cmds.TestPrint) { // GS ( A
@@ -51,10 +64,10 @@ export function setTextFormatting(f: Cmds.TextFormat, docState: Cmds.TranspiledD
   const buffer: number[] = [];
 
   if (f.underline !== undefined || f.resetToDefault) { // ESC - // FS -
-    docState.textFormat.underline = f.underline;
+    const underline = f.underline ?? 'None';
+    docState.textFormat.underline = underline;
     let op: number;
-    switch (f.underline) {
-      default:
+    switch (underline) {
       case 'None'  : op = 0x00; break;
       case 'Single': op = 0x01; break;
       case 'Double': op = 0x02; break;
@@ -75,13 +88,16 @@ export function setTextFormatting(f: Cmds.TextFormat, docState: Cmds.TranspiledD
   }
 
   if (f.alignment !== undefined || f.resetToDefault) { // ESC a
-    docState.textFormat.alignment = f.alignment;
+    // Reset must go back to Left, which is the printer's power-on state. The
+    // default case used to fall through to Center, so resetting the format
+    // silently centred everything that followed.
+    const alignment = f.alignment ?? 'Left';
+    docState.textFormat.alignment = alignment;
     let op: number;
-    switch (f.alignment) {
-      case 'Left': op = 0x00; break;
-      default:
+    switch (alignment) {
+      case 'Left'  : op = 0x00; break;
       case 'Center': op = 0x01; break;
-      case 'Right': op = 0x02; break;
+      case 'Right' : op = 0x02; break;
     }
     buffer.push(Util.AsciiCodeNumbers.ESC, enc('a'), op);
   }
@@ -138,6 +154,8 @@ export function offsetPrintPosition(
       // ESC \ lowbyte highbyte
       return new Uint8Array([Util.AsciiCodeNumbers.ESC, enc('\\'), (rel & 255), (rel >> 8 & 255)]);
     }
+    default:
+      return Util.exhaustiveMatchGuard(cmd.origin);
   }
 }
 
@@ -227,7 +245,7 @@ export function horizontalRule(
   const width = cmd.width ?? docState.initialConfig.charactersPerLine;
   const char = cmd.lineStyle === 'single' ? '─' : '═';
   return textDraw(
-    Util.repeat(char as Cmds.BoxDrawingCharacter, width),
+    Util.repeat(char, width),
     docState);
 }
 
