@@ -67,8 +67,11 @@
 
         // ChromeOS works out of the box!
 
-        // WebUSB requires HTTPS, show an error if the page wasn't loaded securely.
-        if (location.protocol !== 'https:') {
+        // WebUSB requires a secure context, show an error if the page wasn't
+        // loaded in one. Note this is NOT the same as checking for https:
+        // http://localhost (and 127.0.0.1, and file:) are secure contexts too,
+        // which is what makes local development possible at all.
+        if (!window.isSecureContext) {
             document.getElementById('urlNotSecure').classList.remove('d-none');
         }
 
@@ -113,7 +116,10 @@
                 vendorId: 0x2730, // Citizen
               },
               {
-                vendorId: 0x04B8 // Epson
+                vendorId: 0x04B8, // Epson
+              },
+              {
+                vendorId: 0x0aa7, // Wincor Nixdorf (TH230, ESC/POS)
               }
             ]
           }
@@ -457,8 +463,8 @@
                           <p>This demo uses WebUSB to function and your browser doesn't seem to have that available. Try <a href="https://caniuse.com/webusb">using one that has WebUSB</a>.</p>
                       </div>
                       <div class="alert alert-warning d-none" role="alert" id="urlNotSecure">
-                          <h4>WebUSB requires HTTPS</h4>
-                          <p>It looks like this URL is not using HTTPS, and WebUSB <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">only works in a secure context.</a> You'll need to load this page over HTTPS instead.</p>
+                          <h4>WebUSB requires a secure context</h4>
+                          <p>This page was not loaded in a <a href="https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts">secure context</a>, and WebUSB <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">only works in one.</a> Load it over HTTPS, or from <code>localhost</code>, which counts as secure for local development.</p>
                       </div>
                       <div class="alert alert-info" role="alert" id="loadingIndicator">
                           <h4>Loading....</h4>

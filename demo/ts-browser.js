@@ -17,7 +17,18 @@ window.addEventListener('DOMContentLoaded', async () => {
   const scripts = document.getElementsByTagName('script');
 
   // Register the Service Worker which will polyfill the HTML module behavior.
-  await navigator.serviceWorker.register('./demo-sw.js');
+  //
+  // Prefer the widest scope we're allowed. The import map reaches outside this
+  // directory (../src/...), and a worker registered at its own default scope of
+  // ./ cannot intercept those requests, so the browser would try to execute the
+  // raw .ts and refuse it for having a non-JavaScript MIME type. Root scope
+  // needs the server to send `Service-Worker-Allowed: /`; when it doesn't, that
+  // registration throws and we fall back to the default scope.
+  try {
+    await navigator.serviceWorker.register('./demo-sw.js', { scope: '/' });
+  } catch {
+    await navigator.serviceWorker.register('./demo-sw.js');
+  }
 
   // Unfortunately, we have to wait for the Service Worker to ready before
   // actually loading the application so that it can intercept the HTML requests.
@@ -26,29 +37,33 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Next up is to compile the inline typescript present on the page.
     // Pick up their contents, yeet them at the compiler, and then load the result as a URL blob
     // so that modules will load properly.
-    let pending = [];
-    for (let i = 0; i < scripts.length; i++) {
-      if (scripts[i].type === 'text/typescript') {
-        pending.push(
-          new Promise(resolve => {
-            worker.active.postMessage([`Inline script tag ${i}`, scripts[i].innerHTML]);
+    //
+    // These are done strictly one at a time. The worker's reply carries no id
+    // saying which script it belongs to, and it compiles asynchronously, so
+    // replies can come back in a different order than the requests went out.
+    // Posting everything up front and pairing replies positionally would then
+    // execute the wrong blob. Waiting for each reply in turn is slower but is
+    // the only ordering we can actually rely on.
+    const tsScripts = Array.from(scripts).filter(s => s.type === 'text/typescript');
+    for (let i = 0; i < tsScripts.length; i++) {
+      const transpiled = await new Promise(resolve => {
+        const onMessage = ({ data }) => {
+          navigator.serviceWorker.removeEventListener('message', onMessage);
+          resolve(data);
+        };
+        navigator.serviceWorker.addEventListener('message', onMessage);
+        worker.active.postMessage([`Inline script tag ${i}`, tsScripts[i].innerHTML]);
+      });
 
-            navigator.serviceWorker.onmessage = async ({ data: transpiled }) => {
-              // In order for the browser to treat this as the es6 module it is
-              // we must trick it into 'loading' it. We encode it into a blob URL
-              // and then 'import' that.
+      // In order for the browser to treat this as the es6 module it is
+      // we must trick it into 'loading' it. We encode it into a blob URL
+      // and then 'import' that.
 
-              // TODO: Post it externally and then load it inline so it looks more normal?
-              var scriptAsBlob = createBlob(transpiled, 'text/javascript')
-              await import(scriptAsBlob);
-              resolve();
-            }
-          }),
-        )
-      }
+      // TODO: Post it externally and then load it inline so it looks more normal?
+      const scriptAsBlob = createBlob(transpiled, 'text/javascript');
+      await import(scriptAsBlob);
     }
 
-    await Promise.all(pending);
     window.dispatchEvent(tsTranspiledEvent);
   });
 });

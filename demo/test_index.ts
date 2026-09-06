@@ -39,7 +39,10 @@ const printerMgr: PrinterManager = new WebDevices.UsbDeviceManager(
           vendorId: 0x2730, // Citizen
         },
         {
-          vendorId: 0x04B8 // Epson
+          vendorId: 0x04B8, // Epson
+        },
+        {
+          vendorId: 0x0aa7, // Wincor Nixdorf (TH230, ESC/POS)
         }
       ]
     }
