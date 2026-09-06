@@ -185,18 +185,33 @@ export function parseCmdTransmitPrinterId(
 
   // Header values will never match a single-byte response.
   const firstByte = msg[0];
+  if (firstByte === undefined) {
+    // Nothing to read yet, our reply hasn't started arriving.
+    result.messageIncomplete = true;
+    result.messageMatchedExpectedCommand = true;
+    return result;
+  }
   switch (firstByte) {
     case PrinterInfoHeaderA: {
       const infoAPacket = sliceToNull(msg);
       if (infoAPacket.sliced.length === 0) {
+        // The terminating NUL hasn't arrived yet. This is our reply, we just
+        // have part of it - a USB transfer can split a packet anywhere. Claim
+        // it so the caller keeps this command queued and holds the bytes,
+        // instead of handing a half-read reply to the unsolicited-message path.
         result.messageIncomplete = true;
+        result.messageMatchedExpectedCommand = true;
         break;
       }
       if (infoAPacket.sliced.length === 2) {
         // Valid packet, no content. Indicates printer is busy working on it.
-        // Discard the packet and wait for more.
+        // Consume it and wait for the real reply. The remainder MUST advance
+        // past this empty packet: leaving it in the buffer means every later
+        // parse re-reads it, reports incomplete again, and never progresses.
         result.messageIncomplete = true;
+        result.messageMatchedExpectedCommand = true;
         result.remainder = infoAPacket.remainder;
+        break;
       }
 
       // TODO: Handle Printer Info A!
@@ -209,14 +224,20 @@ export function parseCmdTransmitPrinterId(
     case PrinterInfoHeaderB: {
       const infoBPacket = sliceToNull(msg);
       if (infoBPacket.sliced.length === 0) {
+        // See the Info A case: partial reply, hold the buffer and keep waiting.
         result.messageIncomplete = true;
+        result.messageMatchedExpectedCommand = true;
         break;
       }
       if (infoBPacket.sliced.length === 2) {
         // Valid packet, no content. Indicates printer is busy working on it.
-        // Discard the packet and wait for more.
+        // Consume it and wait for the real reply. Note we must NOT fall through
+        // to setPrinterInfoB: the packet is just [header, NUL], so parsing it
+        // would write an empty string over a real config value.
         result.messageIncomplete = true;
+        result.messageMatchedExpectedCommand = true;
         result.remainder = infoBPacket.remainder;
+        break;
       }
 
       setPrinterInfoB(infoBPacket.sliced, command.subcommand, config);

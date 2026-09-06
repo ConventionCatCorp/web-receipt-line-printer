@@ -59,7 +59,11 @@ export class StringMessageTransformer implements MessageTransformer<string> {
 
 export function asUint8Array(commands: Conf.MessageArrayLike): Uint8Array {
   if (typeof commands === "string") {
-    return new TextEncoder().encode(commands);
+    // Must NOT be TextEncoder: that emits UTF-8, so every codepage byte above
+    // 0x7F becomes two or three bytes and the printer receives garbage.
+    // EncodeAscii is the exact inverse of Util.DecodeAscii, which is what
+    // asString uses, so the two round-trip losslessly.
+    return Util.EncodeAscii(commands);
   } else if (commands instanceof Uint8Array) {
     return commands;
   } else {
@@ -107,6 +111,12 @@ export interface ISettingUpdateMessage {
 
 export enum StatusState {
   PrinterOnline = "PrinterOnline",
+  /**
+   * The printer reported itself offline. Note that this is a distinct state
+   * from "not connected": the transport is fine, the printer is telling us it
+   * cannot print right now (cover open, paper out, recovery pending, ...).
+   */
+  PrinterOffline = "PrinterOffline",
   PaperButtonFeedingPaper = "PaperButtonFeedingPaper",
   DrawerOpen = "DrawerOpen",
 }
@@ -250,49 +260,87 @@ export async function parseRaw<TInput extends Conf.MessageArrayLike>(
 ): Promise<{ remainderMsg: TInput; remainderCommands: AwaitedCommand[], messages: PrinterMessage[]; }> {
   let remainderMsg = input;
   if (remainderMsg.length === 0) { return { messages: [], remainderCommands: awaitedCommands, remainderMsg}; }
-  let incomplete = false;
   const messages: PrinterMessage[] = [];
 
-  let remainderCommands = awaitedCommands.slice();
+  const remainderCommands = awaitedCommands.slice();
 
-  do {
-    if (remainderCommands.length === 0) {
-      // No candidate commands, treat as raw!
-      const parseResult = commandSet.handleMessage(remainderMsg, config);
-      remainderMsg = parseResult.remainder;
-      incomplete = parseResult.messageIncomplete;
-      parseResult.messages.forEach(m => messages.push(m));
+  // Consume the buffer from the front until we run out of data, run out of
+  // progress, or hit a partial message we need more bytes to finish.
+  // Every path that needs more bytes breaks out directly, so the loop only has
+  // to check that there is still something left to look at.
+  while (remainderMsg.length > 0) {
+    // Offer the head of the buffer to each awaited command in turn. The first
+    // one that claims it wins; anything that doesn't match is left alone.
+    //
+    // A candidate that does NOT match must never be dropped: the printer is
+    // free to interleave unsolicited messages (ASB) with solicited replies, so
+    // "this isn't your reply" says nothing about whether the reply is still
+    // coming. Dropping it here strands the caller until its timeout fires.
+    let claimedBy: AwaitedCommand | undefined;
+    let claimResult: IMessageHandlerResult<TInput> | undefined;
+    for (const c of remainderCommands) {
+      const parseResult = commandSet.handleMessage(remainderMsg, config, c.cmd);
 
-    } else {
-      remainderCommands = remainderCommands.filter(c => {
-        if (incomplete) {
-          // Something else indicated it's incomplete, keep this candidate too.
-          return true;
-        }
-
-        const parseResult = commandSet.handleMessage(remainderMsg, config, c.cmd);
-        if (parseResult.messageMatchedExpectedCommand) {
-          // The command found its response! Mark it accordingly.
-          if (parseResult.messageIncomplete) {
-            // But the command expects a longer response. Bail IMMEDIATELY.
-            incomplete = true;
-            return true;
-          }
-
-          // Otherwise it's safe to remove that message chunk and remove the candidate.
-          remainderMsg = parseResult.remainder;
-          parseResult.messages.forEach(m => messages.push(m));
-
-          if (c?.resolve === undefined) {
-            console.error('Resolve callback was undefined for awaited command, this may cause a deadlock! This is a bug in the library.');
-          } else {
-            c.resolve(true);
-          }
-          return false;
-        }
-      });
+      // Check incompleteness FIRST. A parser that has recognised its own reply
+      // but needs more bytes may not have set messageMatchedExpectedCommand
+      // yet, and treating that as "no match" would hand a half-read reply to
+      // the unsolicited path below, which would eat a byte out of it.
+      if (parseResult.messageIncomplete) {
+        claimedBy = c;
+        claimResult = parseResult;
+        break;
+      }
+      if (parseResult.messageMatchedExpectedCommand) {
+        claimedBy = c;
+        claimResult = parseResult;
+        break;
+      }
     }
-  } while (incomplete === false && remainderMsg.length > 0 && remainderCommands.length > 0)
+
+    if (claimedBy !== undefined && claimResult !== undefined) {
+      // Always honour whatever the parser consumed, even when it reports the
+      // message as incomplete. A parser may legitimately discard a complete
+      // but empty packet (such as an ESC/POS "still working on it" reply) and
+      // then ask for more data. Ignoring its remainder in that case leaves
+      // those bytes at the head of the buffer forever, and every subsequent
+      // parse re-reads them and reports incomplete again - a poisoned buffer
+      // that times out every future operation on this printer.
+      if (claimResult.remainder.length < remainderMsg.length) {
+        remainderMsg = claimResult.remainder;
+        claimResult.messages.forEach(m => messages.push(m));
+      }
+
+      if (claimResult.messageIncomplete) {
+        // Keep the candidate queued and wait for the rest of its reply.
+        break;
+      }
+
+      // Fully handled: retire the candidate and let its caller continue.
+      remainderCommands.splice(remainderCommands.indexOf(claimedBy), 1);
+      if (claimedBy.resolve === undefined) {
+        console.error('Resolve callback was undefined for awaited command, this may cause a deadlock! This is a bug in the library.');
+      } else {
+        claimedBy.resolve(true);
+      }
+      continue;
+    }
+
+    // Nothing we asked for. Treat it as an unsolicited message.
+    const rawResult = commandSet.handleMessage(remainderMsg, config);
+    rawResult.messages.forEach(m => messages.push(m));
+    if (rawResult.messageIncomplete) {
+      if (rawResult.remainder.length < remainderMsg.length) {
+        remainderMsg = rawResult.remainder;
+      }
+      break;
+    }
+    if (rawResult.remainder.length >= remainderMsg.length) {
+      // The handler consumed nothing and reported no error. Continuing would
+      // spin forever on the same byte, so stop and hand the buffer back.
+      break;
+    }
+    remainderMsg = rawResult.remainder;
+  }
 
   return { remainderMsg, remainderCommands, messages }
 }

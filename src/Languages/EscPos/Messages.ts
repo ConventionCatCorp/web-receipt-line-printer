@@ -127,6 +127,26 @@ export function handleMessage<TReceived extends Conf.MessageArrayLike>(
       // We got a response to a sent command. To proceed we need to know what
       // question we asked. Response bytes don't contain enough info to tell.
       // If we don't know what we asked we can't process this command.
+      if (sentCommand === undefined) {
+        // This happens routinely: a reply that arrives after its command has
+        // already timed out, or after the awaited command list was cleared.
+        // We can't know how long the reply was, so drop a single byte to
+        // resynchronise. Consuming nothing would leave the byte at the head of
+        // the buffer forever, and every later parse would stall on it.
+        result.messages.push({
+          messageType: 'ErrorMessage',
+          errors: new Cmds.ErrorStateSet([Cmds.ErrorState.MessageReceiveException]),
+          exceptions: [
+            new Cmds.MessageParsingError(
+              `Received a command reply byte (${Util.hex(firstByte)}) while no command was awaiting one. It was probably a late reply to a command that already timed out. Dropping one byte to resynchronize.`,
+              msg,
+            )
+          ]
+        });
+        remainder = msg.slice(1);
+        break;
+      }
+
       const handled = cmdSet.callMessageHandler(msg, sentCommand);
       result.messages.push(...handled.messages);
       result.messageIncomplete = handled.messageIncomplete;
