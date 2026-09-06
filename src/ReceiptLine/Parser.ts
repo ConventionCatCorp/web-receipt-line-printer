@@ -189,7 +189,7 @@ function verticalRuleWithHorizontalRule(
     ...repeat(LinePoints.None, Math.max(-rightMarginDifference, 0))
   ];
   // Now merge the points to get the right character.
-  return belowLine.map((c, i) => c | aboveLine[i]);
+  return belowLine.map((c, i) => c | (aboveLine[i] ?? 0));
 }
 
 function getTextSizeMultiplier(
@@ -370,8 +370,10 @@ function columnsToLine(
       }
     }
 
-    lineElement.command = propMembers.get('command');
-    lineElement.comment = propMembers.get('comment');
+    const command = propMembers.get('command');
+    if (command !== undefined) { lineElement.command = command; }
+    const comment = propMembers.get('comment');
+    if (comment !== undefined) { lineElement.comment = comment; }
   }
   // remove invalid property delimiter
   else if (/[{}]/.test(element)) {
@@ -403,7 +405,7 @@ function columnsToLine(
   }
   else if (lineElement.text !== undefined) {
     // text: set column width
-    lineElement.width = index < state.widths.length ? state.widths[index] : 0;
+    lineElement.width = (index < state.widths.length ? state.widths[index] : 0) ?? 0;
   }
   else if (state.widths.find(c => c < 0)) {
     // image, code, command: when the width property includes '*', set '*'
@@ -445,7 +447,7 @@ export function parseReceiptLineToDocument(doc: string, printerConfig: Cmds.Prin
 
   // append commands to start printing
   // strip bom
-  if (doc[0] === '\ufeff') {
+  if (doc.startsWith('\ufeff')) {
     doc = doc.slice(1);
   }
 
@@ -549,7 +551,7 @@ function parseLine(columns: string, state: parseState) {
         text: [''],
         enableWrapping: state.wrap,
         border: state.border,
-        width: state.widths[line.length],
+        width: state.widths[line.length] ?? 0,
       });
     }
   }
@@ -588,6 +590,10 @@ function createLine(
 
   const isTextLine = line.every(el => el.text !== undefined);
   const firstColumn = line[0];
+  // Every branch below reads the first column's border, alignment and wrapping
+  // settings as the settings for the line as a whole, so an empty line has
+  // nothing to render.
+  if (firstColumn === undefined) { return lineCmds; }
 
   // remove zero width columns
   let columns = line.filter(el => el.width !== 0);
@@ -978,7 +984,7 @@ function wrapText(
         let j = 0;
         while (j < t.length) {
           // TODO: make this handle dynamic encoding values
-          w = measureText(t[j], 'cp437') * (decor.width!);
+          w = measureText(t[j] ?? '', 'cp437') * (decor.width ?? 1);
           // output before protruding
           if (w > space) {
             break;

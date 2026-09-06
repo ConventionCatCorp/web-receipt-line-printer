@@ -72,7 +72,7 @@ export const enum AsciiCodeNumbers {
   DEL = 0x7F,
 }
 
-export const AsciiToDisplayLookup: Record<AsciiCodeNumbers, string> = {
+export const AsciiToDisplayLookup: Record<number, string> = {
   [AsciiCodeNumbers.NUL]: "NUL",
   [AsciiCodeNumbers.SOH]: "SOH",
   [AsciiCodeNumbers.STX]: "STX",
@@ -115,7 +115,7 @@ export function hex(num: number) {
 export function asciiToDisplay(...codes: number[]) {
   return codes.map(c => {
     const controlcode = c < 0x20
-      ? AsciiToDisplayLookup[c as AsciiCodeNumbers]
+      ? AsciiToDisplayLookup[c] ?? hex(c)
       : String.fromCharCode(c);
     return `${hex(c)}[${controlcode}]`;
   }).join(', ');

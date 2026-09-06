@@ -83,7 +83,7 @@ const PrinterInfoHeaderB = 0x5f;
 function setSingleByteData(
   firstByte: number,
   subcommand: TransmitPrinterIdCmd,
-  config: Cmds.ISettingUpdateMessage
+  hardware: Conf.UpdateFor<Conf.IPrinterHardware>
 ) {
   switch (subcommand) {
     // Printer ID
@@ -98,11 +98,11 @@ function setSingleByteData(
     case 'TypeID':
       if (Util.hasFlag(firstByte, PrinterId.hasAutocutter)) {
         // TODO: figure out partial vs full cut
-        config.printerHardware!.cutter = Conf.PrintCutter.partial;
+        hardware.cutter = Conf.PrintCutter.partial;
       }
 
-      config.printerHardware!.hasMultiByteSupport = Util.hasFlag(firstByte, PrinterId.hasMultiByteSupport);
-      config.printerHardware!.hasDmdConnected = Util.hasFlag(firstByte, PrinterId.hasDmdConnected);
+      hardware.hasMultiByteSupport = Util.hasFlag(firstByte, PrinterId.hasMultiByteSupport);
+      hardware.hasDmdConnected = Util.hasFlag(firstByte, PrinterId.hasDmdConnected);
       break;
     case 'VersionID':
       // There is a one to one correspondence between the version ID (n = 3, 51) and the firmware version.
@@ -110,13 +110,16 @@ function setSingleByteData(
       // TODO: Is this even useful?
       // config.printerFirmwareVersionId = firstByte;
       break;
+    default:
+      // The Info B subcommands are handled by setPrinterInfoB.
+      break;
   }
 }
 
 function setPrinterInfoB(
   msg: Uint8Array,
   subcommand: TransmitPrinterIdCmd,
-  config: Cmds.ISettingUpdateMessage,
+  hardware: Conf.UpdateFor<Conf.IPrinterHardware>,
 ) {
   // sanity check
   if (msg.at(0) !== PrinterInfoHeaderB || msg.at(-1) !== Util.AsciiCodeNumbers.NUL) {
@@ -135,19 +138,22 @@ function setPrinterInfoB(
     // Printer Info B
     case 'InfoBFirmwareVersion':
       // "Firmware version", not a string?
-      config.printerHardware!.firmware = String.fromCharCode(...packetData);
+      hardware.firmware = String.fromCharCode(...packetData);
       break;
     case 'InfoBMakerName':
-      config.printerHardware!.manufacturer = String.fromCharCode(...packetData);
+      hardware.manufacturer = String.fromCharCode(...packetData);
       break;
     case 'InfoBModelName':
-      config.printerHardware!.model = String.fromCharCode(...packetData);
+      hardware.model = String.fromCharCode(...packetData);
       break;
     case 'InfoBSerialNo':
-      config.printerHardware!.serialNumber = String.fromCharCode(...packetData);
+      hardware.serialNumber = String.fromCharCode(...packetData);
       break;
     case 'InfoBFontLanguage':
-      config.printerHardware!.fontLanguageSupport = String.fromCharCode(...packetData);
+      hardware.fontLanguageSupport = String.fromCharCode(...packetData);
+      break;
+    default:
+      // The single-byte subcommands are handled by setSingleByteData.
       break;
   }
 }
@@ -172,9 +178,10 @@ export function parseCmdTransmitPrinterId(
     remainder: msg,
   }
 
+  const hardware: Conf.UpdateFor<Conf.IPrinterHardware> = {};
   const config: Cmds.ISettingUpdateMessage = {
     messageType: "SettingUpdateMessage",
-    printerHardware: {},
+    printerHardware: hardware,
     printerMedia: {}
   }
 
@@ -240,14 +247,14 @@ export function parseCmdTransmitPrinterId(
         break;
       }
 
-      setPrinterInfoB(infoBPacket.sliced, command.subcommand, config);
+      setPrinterInfoB(infoBPacket.sliced, command.subcommand, hardware);
       result.remainder = infoBPacket.remainder;
       result.messageMatchedExpectedCommand = true;
       result.messages.push(config);
       break;
     }
     default:
-      setSingleByteData(firstByte, command.subcommand, config);
+      setSingleByteData(firstByte, command.subcommand, hardware);
       result.remainder = msg.slice(1);
       result.messageMatchedExpectedCommand = true;
       result.messages.push(config);

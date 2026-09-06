@@ -153,7 +153,7 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
   public override removeEventListener(
     type: string,
     callback: EventListenerOrEventListenerObject | null,
-    options?: boolean | EventListenerOptions | undefined
+    options?: boolean | EventListenerOptions  
   ): void {
     super.removeEventListener(type, callback, options);
   }

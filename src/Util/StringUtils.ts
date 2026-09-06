@@ -34,6 +34,9 @@ export function sliceToNewline(msg: Uint8Array): {
   sliced: Uint8Array,
   remainder: Uint8Array,
 } {
+  // Runtime guard: the type says non-nullable, but this is called with data
+  // that reaches the library from plain JS.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (msg === undefined) {
     return {
       sliced: new Uint8Array(),
@@ -60,6 +63,9 @@ export function sliceToCRLF(msg: string): {
   sliced: string,
   remainder: string,
 } {
+  // Runtime guard: the type says non-nullable, but this is called with data
+  // that reaches the library from plain JS.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (msg === undefined) {
     return {
       sliced: "",

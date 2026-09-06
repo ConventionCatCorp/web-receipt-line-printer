@@ -252,6 +252,8 @@ export function deviceInfoToOptionsUpdate(deviceInfo: IDeviceInformation): ISett
   }
 }
 
+// Kept async for API compatibility: this is exported and every caller awaits it.
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function parseRaw<TInput extends Conf.MessageArrayLike>(
   input: TInput,
   commandSet: CommandSet<Conf.MessageArrayLike>,

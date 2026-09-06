@@ -219,6 +219,9 @@ export abstract class PrinterCommandSet<TMsgType extends Conf.MessageArrayLike> 
     cmd: Commands.IPrinterCommand
   ) {
     const lookup = (cmd as Commands.IPrinterExtendedCommand).typeExtended;
+    // Runtime guard: the cast above asserts a shape that a custom command
+    // written in plain JS may not actually have.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!lookup) {
       throw new TranspileDocumentError(
         `Command '${cmd.constructor.name}' did not have a value for typeExtended. If you're trying to implement a custom command check the documentation.`

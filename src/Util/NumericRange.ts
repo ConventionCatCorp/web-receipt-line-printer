@@ -21,14 +21,14 @@ export function numberInRange(
   min?: number,
   max?: number) {
   if (!/^[+-]?\d+$/.test(str)) {
-    return;
+    return undefined;
   }
   const val = Number(str);
   if (min !== undefined && val < min) {
-    return;
+    return undefined;
   }
   if (max !== undefined && val > max) {
-    return;
+    return undefined;
   }
   return val;
 }

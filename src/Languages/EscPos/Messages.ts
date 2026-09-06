@@ -4,18 +4,23 @@ import * as Cmds from '../../Commands/index.js';
 
 import { CmdSetAutoStatusBack } from './CmdSetAutoStatusBack.js';
 
-/* eslint-disable @typescript-eslint/no-duplicate-enum-values */
-export enum MessageCandidates {
-  Response = 0x00,
-  ASB2to4  = 0x00,
-  Realtime = 0x12,
-  AutoStat = 0x10,
-  Header   = 0x11,
+/**
+ * Recognizable first-byte patterns for messages the printer can send.
+ *
+ * A plain const object rather than an enum: these are compared against raw
+ * bytes read off the wire, and an enum would make every such comparison a
+ * mixed-type one. Several values deliberately coincide.
+ */
+export const MessageCandidates = {
+  Response: 0x00,
+  ASB2to4 : 0x00,
+  Realtime: 0x12,
+  AutoStat: 0x10,
+  Header  : 0x11,
   // Serial only
-  XON      = 0x11,
-  XOFF     = 0x13,
-}
-/* eslint-enable @typescript-eslint/no-duplicate-enum-values */
+  XON     : 0x11,
+  XOFF    : 0x13,
+} as const;
 
 type MessageCandidate = 'unknown' | 'response' | 'asb' | 'realtime' | 'header' |'xon' | 'xoff'
 
@@ -95,7 +100,7 @@ export function handleMessage<TReceived extends Conf.MessageArrayLike>(
   }
   const msg = Cmds.asUint8Array(message);
   let remainder = msg;
-  if (msg === undefined || msg.length === 0) { return result; }
+  if (msg.length === 0) { return result; }
   // There are several categories of messages ESC/POS can send. Broadly:
   // * Automatic Status Back (ASB) - Sent whenever the printer wants to.
   // * Real-time commands - Processed asap and responded to asap, blocking otherwise.

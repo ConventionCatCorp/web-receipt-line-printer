@@ -28,8 +28,7 @@ function awaited(cmd: IPrinterCommand) {
  *   3rd byte     0110 xx00
  *   4th byte     0110 1111
  */
-const asbOnline  = () => new Uint8Array([0x10, 0x00, 0x60, 0x6f]);
-const asbOffline = () => new Uint8Array([0x18, 0x00, 0x60, 0x6f]);
+const asbOnline = () => new Uint8Array([0x10, 0x00, 0x60, 0x6f]);
 
 /** A Printer Info B reply: header 0x5f, payload, NUL terminator. */
 function infoB(payload: string) {

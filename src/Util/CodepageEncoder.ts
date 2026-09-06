@@ -27,10 +27,10 @@ export type Codepage
   | 'CP861'
   | 'CP862'
   | 'CP863'
-  | 'CP863' // CANADIAN-FRENCH
+    // CANADIAN-FRENCH
   | 'CP864'
   | 'CP865'
-  | 'CP865' // NORDIC
+    // NORDIC
   | 'CP866' // Cyrillic 2
   | 'CP869'
   //| 'CP932' // Actually shiftjis?
