@@ -36,3 +36,27 @@ describe('Converters', () => {
     expect(result).toStrictEqual(expected);
   })
 })
+
+describe('Codepage byte round-tripping', () => {
+  it('preserves bytes above 0x7F', () => {
+    // asString used TextDecoder('ascii'), which the Encoding Standard defines
+    // as an alias for windows-1252, while asUint8Array used TextEncoder, which
+    // emits UTF-8. The pair was not lossless: every codepage byte in 0x80-0xFF
+    // came back as a different value, or as two or three bytes.
+    const bytes = new Uint8Array([0x80, 0x92, 0x9f, 0xa0, 0xc7, 0xfe, 0xff]);
+    expect(Msgs.asUint8Array(Msgs.asString(bytes))).toStrictEqual(bytes);
+  });
+
+  it('round-trips every possible byte value', () => {
+    const all = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) { all[i] = i; }
+    expect(Msgs.asUint8Array(Msgs.asString(all))).toStrictEqual(all);
+  });
+
+  it('does not expand high bytes into UTF-8 sequences', () => {
+    // 0xC7 is 'Ç' in CP850. Encoded as UTF-8 it would be two bytes, and the
+    // printer would render mojibake.
+    const single = new Uint8Array([0xc7]);
+    expect(Msgs.asUint8Array(Msgs.asString(single))).toHaveLength(1);
+  });
+});

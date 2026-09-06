@@ -102,7 +102,7 @@ const definitions: Record<Codepage, CodepageDefinition> = {
     name: 'Multilingual',
     languages: ['en'],
     offset: 128,
-    chars: 'ÇüéâäůćçłëŐőîŹÄĆÉĹĺôöĽľŚśÖÜŤťŁ×čáíóúĄąŽžĘę¬źČş«»░▒▓│┤ÁÂĚŞ╣║╗╝Żż┐└┴┬├─┼Ăă╚╔╩╦╠═╬¤đĐĎËďŇÍÎě┘┌█▄ŢŮ▀ÓßÔŃńňŠšŔÚŕŰýÝţ´­˝˛ˇ˘§÷¸°¨˙űŘř■ ',
+    chars: 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤ÁÂÀ©╣║╗╝¢¥┐└┴┬├─┼ãÃ╚╔╩╦╠═╬¤ðÐÊËÈıÍÎÏ┘┌█▄¦Ì▀ÓßÔÒõÕµþÞÚÛÙýÝ¯´­±‗¾¶§÷¸°¨·¹³²■ ',
   },
   'CP851': {
     name: 'Greek',
@@ -430,8 +430,17 @@ export class CodepageEncoder {
     let activeFragmentBuffer: number[] = [];
     let currentCodepage: Codepage | undefined;
 
-    for (let c = 0; c < input.length; c++) {
-      const codepoint = input.codePointAt(c) ?? this.questionMark;
+    const fallbackCodepage = candidates[0];
+    if (fallbackCodepage === undefined) {
+      throw new Error('At least one candidate codepage is required to encode text.');
+    }
+
+    // Iterate by code point, not by UTF-16 unit. Indexing with `input[c]` while
+    // advancing one unit at a time splits every astral character (emoji, and
+    // anything else above U+FFFF) into two lone surrogates, neither of which is
+    // in any codepage table, so one character became two '?' bytes.
+    for (const char of input) {
+      const codepoint = char.codePointAt(0) ?? CodepageEncoder.questionMark;
 
       let selectedCodepage: Codepage | undefined;
       let charCodepoint = 0;
@@ -439,13 +448,13 @@ export class CodepageEncoder {
       // Common page characters can be attached anywhere.
       // So attach it to the active page for less thrashing.
       if (codepoint < 128) {
-        selectedCodepage = currentCodepage ?? candidates[0];
+        selectedCodepage = currentCodepage ?? fallbackCodepage;
         charCodepoint = codepoint;
       }
 
       // See if we can re-use the current codepage.
       if (selectedCodepage === undefined && currentCodepage !== undefined) {
-        const position = definitions[currentCodepage].chars.indexOf(input[c]);
+        const position = definitions[currentCodepage].chars.indexOf(char);
 
         if (position !== -1) {
           selectedCodepage = currentCodepage;
@@ -455,12 +464,12 @@ export class CodepageEncoder {
 
       // We can't, so go looking for the right one from the candidates.
       if (selectedCodepage === undefined) {
-        for (let i = 0; i < candidates.length; i++) {
-          const position = definitions[candidates[i]].chars.indexOf(input[c]);
+        for (const candidate of candidates) {
+          const position = definitions[candidate].chars.indexOf(char);
 
           if (position !== -1) {
-            selectedCodepage = candidates[i];
-            charCodepoint = definitions[candidates[i]].offset + position;
+            selectedCodepage = candidate;
+            charCodepoint = definitions[candidate].offset + position;
             break;
           }
         }
@@ -468,8 +477,8 @@ export class CodepageEncoder {
 
       // Nothing found, give up and print a '?' instead.
       if (selectedCodepage === undefined) {
-        selectedCodepage = currentCodepage ?? candidates[0];
-        charCodepoint = this.questionMark;
+        selectedCodepage = currentCodepage ?? fallbackCodepage;
+        charCodepoint = CodepageEncoder.questionMark;
       }
 
       if (currentCodepage !== selectedCodepage) {
@@ -490,7 +499,7 @@ export class CodepageEncoder {
 
     if (activeFragmentBuffer.length > 0) {
       fragments.push({
-        codepage: currentCodepage ?? candidates[0],
+        codepage: currentCodepage ?? fallbackCodepage,
         bytes: new Uint8Array(activeFragmentBuffer),
       });
     }
