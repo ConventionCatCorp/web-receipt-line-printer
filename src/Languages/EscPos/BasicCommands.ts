@@ -20,14 +20,67 @@ export function enc(char: string): number {
   return encoded[0];
 }
 
-export function testPrint(cmd: Cmds.TestPrint) { // GS ( A
-  let page = 0x03;
-  switch (cmd.printType) {
-    case 'hexadecimal': page = 0x01; break;
-    case 'printerStatus': page = 0x02; break;
-    case 'rolling': page = 0x03; break;
+/** Encode lines of plain ASCII text, each terminated with a line feed. */
+function textLines(...lines: string[]): Uint8Array {
+  return Cmds.asUint8Array(lines.map(l => l + '\n').join(''));
+}
+
+/** Printable ASCII, shifted one character further along on each line. */
+function rollingPattern(docState: Cmds.TranspiledDocumentState): Uint8Array {
+  const width = docState.initialConfig.charactersPerLine;
+  let set = '';
+  for (let c = 0x20; c <= 0x7e; c++) { set += String.fromCharCode(c); }
+
+  // Repeated so a window of `width` starting anywhere in the set is in range.
+  const wrapped = set.repeat(Math.ceil((width + set.length) / set.length));
+
+  const lines: string[] = [];
+  for (let row = 0; row < 16; row++) {
+    const start = row % set.length;
+    lines.push(wrapped.slice(start, start + width));
   }
-  return new Uint8Array([Util.AsciiCodeNumbers.GS, enc('('), enc('A'), 0x02, 0x00, 0x01, page]);
+  return textLines(...lines);
+}
+
+/** The printer status page, rendered from the configuration we already hold. */
+function statusPage(docState: Cmds.TranspiledDocumentState): Uint8Array {
+  const c = docState.initialConfig;
+  const width = c.charactersPerLine;
+  const rule = '-'.repeat(width);
+  const row = (label: string, value: string) => `${(label + ':').padEnd(14)}${value}`;
+
+  return textLines(
+    rule,
+    'Printer status',
+    rule,
+    row('Manufacturer', c.manufacturer),
+    row('Model', c.model),
+    row('Serial', c.serialNumber),
+    row('Firmware', c.firmware),
+    row('Chars/line', String(width)),
+    rule,
+  );
+}
+
+/**
+ * Render a test print as text. GS ( A is an Epson extension: a Wincor Nixdorf
+ * TH230+ accepts it for every documented n/m pair and prints nothing.
+ */
+export function testPrint(
+  cmd: Cmds.TestPrint,
+  docState: Cmds.TranspiledDocumentState,
+): Uint8Array {
+  switch (cmd.printType) {
+    case 'rolling':       return rollingPattern(docState);
+    case 'printerStatus': return statusPage(docState);
+    case 'hexadecimal':
+      // A printer mode, not a document, so there is nothing to render in its
+      // place. n=0 because n=1 is not a documented value for GS ( A.
+      return new Uint8Array([
+        Util.AsciiCodeNumbers.GS, enc('('), enc('A'), 0x02, 0x00, 0x00, 0x01,
+      ]);
+    default: return Util.exhaustiveMatchGuard(cmd.printType);
+  }
 }
 
 export function cutHandler(cmd: Cmds.Cut, docState: Cmds.TranspiledDocumentState) {

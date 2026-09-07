@@ -46,7 +46,7 @@ export class EscPos extends Cmds.RawCommandSet {
         },
         PrintConfiguration: {
           commandType: 'PrintConfiguration',
-          transpile: () => Basic.testPrint(new Cmds.TestPrint('printerStatus'))
+          transpile: (_c, d) => Basic.testPrint(new Cmds.TestPrint('printerStatus'), d)
         },
         QueryConfiguration: {
           commandType: 'QueryConfiguration',
@@ -64,7 +64,7 @@ export class EscPos extends Cmds.RawCommandSet {
         },
         TestPrint: {
           commandType: 'TestPrint',
-          transpile: (c) => Basic.testPrint(c as Cmds.TestPrint),
+          transpile: (c, d) => Basic.testPrint(c as Cmds.TestPrint, d),
         },
         PulseOutput: {
           commandType: 'PulseOutput',
