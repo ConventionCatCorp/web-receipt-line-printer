@@ -55,8 +55,9 @@ enum PaperSensorByte {
 }
 
 enum DrawerKickByte {
-  // Drawer kick-out connector pin 3 state
-  DrawerKickOut = 0x01,
+  // Drawer kick-out connector pin 3. Epson uses bit 0 alone; some printers
+  // report it as a bit pair, so either bit means high.
+  DrawerKickOut = 0x03,
 }
 
 // Only present on ink-based printers, uncommon.
@@ -85,6 +86,10 @@ enum DrawerKickByte {
  * are deliberately not checked. Paper sensor bits travel in pairs (0/1 for
  * near-end, 2/3 for end), and models without a near-end sensor report that
  * pair as 0.
+ *
+ * Not every printer follows this table exactly, so the checks stay as loose as
+ * they can while still telling the two subcommands apart. A Wincor Nixdorf
+ * TH230 replies 0x60 to n=1 and 0x03 to n=2.
  */
 function isValidStatusByte(byte: number, subcommand: TransmitPrinterStatusCmd): boolean {
   // Bits 4 and 7 are fixed 0 for all GS r replies.
@@ -98,9 +103,13 @@ function isValidStatusByte(byte: number, subcommand: TransmitPrinterStatusCmd): 
       return (nearEnd === 0x00 || nearEnd === 0x03)
           && (end     === 0x00 || end     === 0x0c);
     }
-    case 'DrawerKickStatus':
-      // Only bit 0 carries meaning; bits 1-3 are fixed 0.
-      return (byte & 0x0e) === 0;
+    case 'DrawerKickStatus': {
+      // Bits 2 and 3 are what separate a drawer reply from a paper one. Bits
+      // 0 and 1 carry the pin, as bit 0 alone or as a pair. Rejecting a pair
+      // stranded the query: GS r is answered once, so nothing else was coming.
+      const pin = byte & 0x03;
+      return (byte & 0x0c) === 0 && (pin === 0x00 || pin === 0x01 || pin === 0x03);
+    }
     default:
       return Util.exhaustiveMatchGuard(subcommand);
   }
@@ -166,7 +175,7 @@ export function parseCmdTransmitPrinterStatus(
       if (error.errors.size > 0) { result.messages.push(error); }
       break;
     case 'DrawerKickStatus':
-      if (Util.hasFlag(byte, DrawerKickByte.DrawerKickOut)) {
+      if ((byte & DrawerKickByte.DrawerKickOut) !== 0) {
         status.statuses.add(Cmds.StatusState.DrawerOpen);
       }
       if (status.statuses.size > 0) { result.messages.push(status); }

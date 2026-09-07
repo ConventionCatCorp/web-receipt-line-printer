@@ -175,6 +175,43 @@ describe('GS r reply validation', () => {
     expect(statusesOf(result.messages)).toContain(Msgs.StatusState.DrawerOpen);
   });
 
+  it('accepts a drawer reply that reports the pin as a bit pair', async () => {
+    // A TH230 answers GS r 2 with 0x03, not Epson's 0x01. That failed
+    // validation, so nothing claimed the byte and the document timed out.
+    const { cmdSet, config } = setup();
+    const { record, resolveSpy } = awaited(new CmdTransmitPrinterStatus('DrawerKickStatus'));
+
+    const result = await Msgs.parseRaw(new Uint8Array([0x03]), cmdSet, config, [record]);
+
+    expect(resolveSpy).toHaveBeenCalledWith(true);
+    expect(result.remainderMsg).toHaveLength(0);
+    expect(statusesOf(result.messages)).toContain(Msgs.StatusState.DrawerOpen);
+  });
+
+  it('accepts a paper reply with the undefined bits set', async () => {
+    // The same printer answers GS r 1 with 0x60; bits 5 and 6 are undefined
+    // and must not read as a tripped sensor.
+    const { cmdSet, config } = setup();
+    const { record, resolveSpy } = awaited(new CmdTransmitPrinterStatus('PaperSensorStatus'));
+
+    const result = await Msgs.parseRaw(new Uint8Array([0x60]), cmdSet, config, [record]);
+
+    expect(resolveSpy).toHaveBeenCalledWith(true);
+    expect(errorsOf(result.messages)).toHaveLength(0);
+  });
+
+  it('still rejects a paper end reply for a drawer query', async () => {
+    // Bits 2 and 3 stay the discriminator: widening the pin check must not
+    // let a paper reply claim a drawer query.
+    const { cmdSet, config } = setup();
+    const { record, resolveSpy } = awaited(new CmdTransmitPrinterStatus('DrawerKickStatus'));
+
+    const result = await Msgs.parseRaw(new Uint8Array([0x0f]), cmdSet, config, [record]);
+
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(result.remainderCommands).toHaveLength(1);
+  });
+
   it('reports paper adequate without inventing errors', async () => {
     const { cmdSet, config } = setup();
     const { record, resolveSpy } = awaited(new CmdTransmitPrinterStatus('PaperSensorStatus'));
