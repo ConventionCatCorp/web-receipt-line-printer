@@ -434,6 +434,12 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
     // Iterate through the response message and the command candidates in order,
     // but always validate the message is the format we wanted.
     const msg = this._channelMessageTransformer.combineMessages(...input);
+    this.logResultIfDebug(() => {
+      // Widened to the union: TChannelType does not narrow through a spread.
+      const raw: Conf.MessageArrayLike = msg;
+      const shown = typeof raw === 'string' ? raw : Util.asciiToDisplay(...raw);
+      return `Received ${msg.length} bytes: ${shown}`;
+    });
     const parsed = await Cmds.parseRaw(
       msg,
       this._commandSet,
