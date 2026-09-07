@@ -85,12 +85,12 @@ export class PulseCommand implements IPrinterBasicCommand {
     /** Which device pin to pulse on */
     pulsePin: PulsePin = "Drawer1",
     /** Milliseconds pulse is on for, up to 500ms. */
-    onMS: number = 100,
+    onMS = 100,
     /** Milliseconds pulse is off for. Must be greater than on time. Up to 500ms */
-    offMS: number = 500,
+    offMS = 500,
   ) {
-    this.onMS = Math.floor(Math.min(500, onMS ?? 100));
-    this.offMS = Math.floor(Math.min(500, offMS ?? 500));
+    this.onMS = Math.floor(Math.min(500, onMS));
+    this.offMS = Math.floor(Math.min(500, offMS));
     this.pulsePin = pulsePin;
   }
 }
@@ -155,9 +155,9 @@ export class TextFormatting implements IPrinterBasicCommand {
   toDisplay() {
     const sb = ['Set text formatting: '];
     if (this.format.resetToDefault === true) { sb.push('first reset to defaults'); }
-    if (this.format.bold      !== undefined) { sb.push('set bold ' +      this.format.bold); }
-    if (this.format.height    !== undefined) { sb.push('set height ' +    this.format.height); }
-    if (this.format.width     !== undefined) { sb.push('set width ' +     this.format.width); }
+    if (this.format.bold      !== undefined) { sb.push(`set bold ${this.format.bold}`); }
+    if (this.format.height    !== undefined) { sb.push(`set height ${this.format.height}`); }
+    if (this.format.width     !== undefined) { sb.push(`set width ${this.format.width}`); }
     if (this.format.underline !== undefined) { sb.push('set underline ' + this.format.underline); }
     if (this.format.invert    !== undefined) { sb.push('set invert ' +    this.format.invert); }
     if (this.format.alignment !== undefined) { sb.push('set alignment ' + this.format.alignment); }
@@ -208,7 +208,7 @@ export class Text implements IPrinterBasicCommand {
   effectFlags = NoEffect;
   toDisplay() { return `Write '${this.text}'`; }
 
-  constructor(public readonly text: string = '') {}
+  constructor(public readonly text = '') {}
 }
 
 export class SetCodepage implements IPrinterBasicCommand {
@@ -276,7 +276,7 @@ export class SetLineSpacing implements IPrinterBasicCommand {
 
   public readonly spacing: number;
 
-  constructor(spacing: number = 1) {
+  constructor(spacing = 1) {
     this.spacing = Util.clampToRange(spacing, 0, 255);
   }
 }

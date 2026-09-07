@@ -1,7 +1,7 @@
 import * as Conf from '../Configs/index.js';
 import * as Commands from './Commands.js';
 import { TranspileDocumentError, type TranspiledDocumentState } from "./TranspileCommand.js";
-import { MessageParsingError, RawMessageTransformer, StringMessageTransformer, type CommandSetMessageHandlerDelegate, type IMessageHandlerResult, type MessageTransformer } from './Messages.js';
+import { ErrorState, ErrorStateSet, MessageParsingError, RawMessageTransformer, StringMessageTransformer, type CommandSetMessageHandlerDelegate, type IMessageHandlerResult, type MessageTransformer } from './Messages.js';
 import type { PrinterConfig } from './PrinterConfig.js';
 
 /** How a command should be wrapped into a form, if at all */
@@ -166,32 +166,62 @@ export abstract class PrinterCommandSet<TMsgType extends Conf.MessageArrayLike> 
     return config;
   }
 
+  /**
+   * Dispatch a received message to the handler for the command that asked for it.
+   *
+   * This must NEVER throw. It runs on the input listener's read loop, and an
+   * exception there rejects the listener's promise, which permanently stops the
+   * loop while the channel stays open and `connected` keeps reporting true.
+   * The printer then looks healthy but every subsequent operation waits out its
+   * full timeout, forever. Unparseable input is reported as an ErrorMessage and
+   * left for the caller to resynchronise instead.
+   */
   public callMessageHandler(
     message: TMsgType,
     sentCommand?: Commands.IPrinterCommand
   ): IMessageHandlerResult<TMsgType> {
+    const unhandled = (reason: string): IMessageHandlerResult<TMsgType> => ({
+      messageIncomplete: false,
+      messageMatchedExpectedCommand: false,
+      messages: [{
+        messageType: 'ErrorMessage',
+        errors: new ErrorStateSet([ErrorState.MessageReceiveException]),
+        exceptions: [new MessageParsingError(reason, message)],
+      }],
+      remainder: message,
+    });
+
     if (sentCommand === undefined) {
-      throw new MessageParsingError(
-        `Received a command reply message without 'sentCommand' being provided, can't handle this message.`,
-        message
+      // Not an error in itself: the printer is free to send unsolicited data,
+      // and a reply can legitimately arrive after its command already timed out.
+      return unhandled(
+        `Received a command reply message without 'sentCommand' being provided, can't handle this message.`
       );
     }
 
     const handler = this.getMappedCmd(sentCommand)?.readMessage;
     if (handler === undefined) {
-      throw new MessageParsingError(
-        `Command '${sentCommand.name}' has no message handler and should not have been awaited for this message. This is a bug in the library.`,
-        message
-      )
+      return unhandled(
+        `Command '${sentCommand.name}' has no message handler and should not have been awaited for this message. This is a bug in the library.`
+      );
     }
 
-    return handler(message, sentCommand);
+    try {
+      return handler(message, sentCommand);
+    } catch (e) {
+      return unhandled(
+        `Message handler for command '${sentCommand.name}' threw: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
   }
 
   protected getExtendedCommand(
     cmd: Commands.IPrinterCommand
   ) {
     const lookup = (cmd as Commands.IPrinterExtendedCommand).typeExtended;
+    // Runtime guard: the cast above asserts a shape that a custom command
+    // written in plain JS may not actually have.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!lookup) {
       throw new TranspileDocumentError(
         `Command '${cmd.constructor.name}' did not have a value for typeExtended. If you're trying to implement a custom command check the documentation.`

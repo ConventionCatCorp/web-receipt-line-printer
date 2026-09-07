@@ -72,7 +72,7 @@ export const enum AsciiCodeNumbers {
   DEL = 0x7F,
 }
 
-export const AsciiToDisplayLookup: Record<AsciiCodeNumbers, string> = {
+export const AsciiToDisplayLookup: Record<number, string> = {
   [AsciiCodeNumbers.NUL]: "NUL",
   [AsciiCodeNumbers.SOH]: "SOH",
   [AsciiCodeNumbers.STX]: "STX",
@@ -115,7 +115,7 @@ export function hex(num: number) {
 export function asciiToDisplay(...codes: number[]) {
   return codes.map(c => {
     const controlcode = c < 0x20
-      ? AsciiToDisplayLookup[c as AsciiCodeNumbers]
+      ? AsciiToDisplayLookup[c] ?? hex(c)
       : String.fromCharCode(c);
     return `${hex(c)}[${controlcode}]`;
   }).join(', ');
@@ -141,8 +141,24 @@ export function EncodeAscii(str: string): Uint8Array {
 
 /**
  * Convert a byte array of raw ASCII codepoints to a string.
+ *
+ * This is the exact inverse of {@link EncodeAscii}: byte `n` becomes codepoint
+ * `n`, for all of 0x00-0xFF.
+ *
+ * Note that `TextDecoder` cannot be used here. Per the WHATWG Encoding
+ * Standard every label that sounds like it would work - 'ascii', 'us-ascii',
+ * 'latin1', 'iso-8859-1' - is an alias for **windows-1252**, which remaps
+ * 0x80-0x9F to characters like U+2020. Round-tripping those through
+ * `EncodeAscii` (or `TextEncoder`, which emits UTF-8) corrupts every codepage
+ * byte above 0x7F. Doing the mapping by hand is the only way to stay lossless.
  * @param array
  */
 export function DecodeAscii(array: Uint8Array): string {
-  return new TextDecoder('ascii').decode(array);
+  // Chunked to avoid blowing the argument limit on large buffers.
+  const chunkSize = 8192;
+  let out = '';
+  for (let i = 0; i < array.length; i += chunkSize) {
+    out += String.fromCharCode(...array.subarray(i, i + chunkSize));
+  }
+  return out;
 }

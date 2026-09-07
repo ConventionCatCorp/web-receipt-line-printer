@@ -2,19 +2,85 @@ import * as Util from '../../Util/index.js';
 import * as Cmds from '../../Commands/index.js';
 import { codepageNumberForEscPos, codepageSwitchCmd } from './Codepages.js';
 
-/** Encode a single character, for readability of command sequences. */
-export function enc(char = '') {
-  return Cmds.asUint8Array(char)[0];
+/**
+ * Encode a single character, for readability of command sequences.
+ *
+ * Every call site passes a literal, so an empty or multi-character argument is
+ * a programming mistake rather than something to encode as a stray zero byte
+ * in the middle of a command.
+ */
+export function enc(char: string): number {
+  const encoded = Cmds.asUint8Array(char);
+  if (encoded.length !== 1 || encoded[0] === undefined) {
+    throw new Cmds.MessageParsingError(
+      `enc() expects exactly one character, got ${JSON.stringify(char)}.`,
+      char
+    );
+  }
+  return encoded[0];
 }
 
-export function testPrint(cmd: Cmds.TestPrint) { // GS ( A
-  let page = 0x03;
-  switch (cmd.printType) {
-    case 'hexadecimal': page = 0x01; break;
-    case 'printerStatus': page = 0x02; break;
-    case 'rolling': page = 0x03; break;
+/** Encode lines of plain ASCII text, each terminated with a line feed. */
+function textLines(...lines: string[]): Uint8Array {
+  return Cmds.asUint8Array(lines.map(l => l + '\n').join(''));
+}
+
+/** Printable ASCII, shifted one character further along on each line. */
+function rollingPattern(docState: Cmds.TranspiledDocumentState): Uint8Array {
+  const width = docState.initialConfig.charactersPerLine;
+  let set = '';
+  for (let c = 0x20; c <= 0x7e; c++) { set += String.fromCharCode(c); }
+
+  // Repeated so a window of `width` starting anywhere in the set is in range.
+  const wrapped = set.repeat(Math.ceil((width + set.length) / set.length));
+
+  const lines: string[] = [];
+  for (let row = 0; row < 16; row++) {
+    const start = row % set.length;
+    lines.push(wrapped.slice(start, start + width));
   }
-  return new Uint8Array([Util.AsciiCodeNumbers.GS, enc('('), enc('A'), 0x02, 0x00, 0x01, page]);
+  return textLines(...lines);
+}
+
+/** The printer status page, rendered from the configuration we already hold. */
+function statusPage(docState: Cmds.TranspiledDocumentState): Uint8Array {
+  const c = docState.initialConfig;
+  const width = c.charactersPerLine;
+  const rule = '-'.repeat(width);
+  const row = (label: string, value: string) => `${(label + ':').padEnd(14)}${value}`;
+
+  return textLines(
+    rule,
+    'Printer status',
+    rule,
+    row('Manufacturer', c.manufacturer),
+    row('Model', c.model),
+    row('Serial', c.serialNumber),
+    row('Firmware', c.firmware),
+    row('Chars/line', String(width)),
+    rule,
+  );
+}
+
+/**
+ * Render a test print as text. GS ( A is an Epson extension: a Wincor Nixdorf
+ * TH230+ accepts it for every documented n/m pair and prints nothing.
+ */
+export function testPrint(
+  cmd: Cmds.TestPrint,
+  docState: Cmds.TranspiledDocumentState,
+): Uint8Array {
+  switch (cmd.printType) {
+    case 'rolling':       return rollingPattern(docState);
+    case 'printerStatus': return statusPage(docState);
+    case 'hexadecimal':
+      // A printer mode, not a document, so there is nothing to render in its
+      // place. n=0 because n=1 is not a documented value for GS ( A.
+      return new Uint8Array([
+        Util.AsciiCodeNumbers.GS, enc('('), enc('A'), 0x02, 0x00, 0x00, 0x01,
+      ]);
+    default: return Util.exhaustiveMatchGuard(cmd.printType);
+  }
 }
 
 export function cutHandler(cmd: Cmds.Cut, docState: Cmds.TranspiledDocumentState) {
@@ -51,10 +117,10 @@ export function setTextFormatting(f: Cmds.TextFormat, docState: Cmds.TranspiledD
   const buffer: number[] = [];
 
   if (f.underline !== undefined || f.resetToDefault) { // ESC - // FS -
-    docState.textFormat.underline = f.underline;
+    const underline = f.underline ?? 'None';
+    docState.textFormat.underline = underline;
     let op: number;
-    switch (f.underline) {
-      default:
+    switch (underline) {
       case 'None'  : op = 0x00; break;
       case 'Single': op = 0x01; break;
       case 'Double': op = 0x02; break;
@@ -75,13 +141,16 @@ export function setTextFormatting(f: Cmds.TextFormat, docState: Cmds.TranspiledD
   }
 
   if (f.alignment !== undefined || f.resetToDefault) { // ESC a
-    docState.textFormat.alignment = f.alignment;
+    // Reset must go back to Left, which is the printer's power-on state. The
+    // default case used to fall through to Center, so resetting the format
+    // silently centred everything that followed.
+    const alignment = f.alignment ?? 'Left';
+    docState.textFormat.alignment = alignment;
     let op: number;
-    switch (f.alignment) {
-      case 'Left': op = 0x00; break;
-      default:
+    switch (alignment) {
+      case 'Left'  : op = 0x00; break;
       case 'Center': op = 0x01; break;
-      case 'Right': op = 0x02; break;
+      case 'Right' : op = 0x02; break;
     }
     buffer.push(Util.AsciiCodeNumbers.ESC, enc('a'), op);
   }
@@ -138,6 +207,8 @@ export function offsetPrintPosition(
       // ESC \ lowbyte highbyte
       return new Uint8Array([Util.AsciiCodeNumbers.ESC, enc('\\'), (rel & 255), (rel >> 8 & 255)]);
     }
+    default:
+      return Util.exhaustiveMatchGuard(cmd.origin);
   }
 }
 
@@ -227,7 +298,7 @@ export function horizontalRule(
   const width = cmd.width ?? docState.initialConfig.charactersPerLine;
   const char = cmd.lineStyle === 'single' ? '─' : '═';
   return textDraw(
-    Util.repeat(char as Cmds.BoxDrawingCharacter, width),
+    Util.repeat(char, width),
     docState);
 }
 

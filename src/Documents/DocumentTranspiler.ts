@@ -103,6 +103,9 @@ function splitTransactionsAndForms(
             commandStack.push(new Cmds.NoOp());
             continue;
           case Cmds.CommandReorderBehavior.closeForm:
+            // The narrowing from the enclosing `if` is unsound here: withinForm
+            // is mutated inside this loop, so it really can be false by now.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
             if (currentForm.withinForm) {
               // The label wasn't closed so we must do it ourselves. Add a command
               // to close the label on the stack and send it back around.
@@ -112,6 +115,7 @@ function splitTransactionsAndForms(
             }
             break;
           case Cmds.CommandReorderBehavior.throwError:
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
             if (currentForm.withinForm) {
               throw new Cmds.TranspileDocumentError("Non-form command present within a document form and Command Reorder Behavior was set to throw errors.");
             }

@@ -12,20 +12,29 @@ export interface ReceiptPrinterEventMap {
   reportedError: CustomEvent<Cmds.IErrorMessage>;
 }
 
-function promiseWithTimeout<T>(
+/**
+ * Race a promise against a timeout, always cleaning up the timer.
+ *
+ * The timer must be cleared in a `finally`. Without it every call leaves an
+ * armed `setTimeout` behind for the full duration even when the promise won,
+ * which for a config refresh alone is dozens of live timers per connect.
+ */
+async function promiseWithTimeout<T>(
   promise: Promise<T>,
   ms: number,
-  timeoutError = new Error('Promise timed out')
+  timeoutError: Error = new Error('Promise timed out')
 ): Promise<T> {
-  // create a promise that rejects in milliseconds
-  const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(timeoutError);
-    }, ms);
-  });
-
-  // returns a race between timeout and the passed promise
-  return Promise.race<T>([promise, timeout]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { reject(timeoutError); }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) { clearTimeout(timer); }
+  }
 }
 
 /** Type alias for a Receipt Printer that communicates over USB. */
@@ -40,7 +49,10 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
   private _commandSet?: Cmds.CommandSet<Conf.MessageArrayLike>;
 
   private _awaitedCommands: Cmds.AwaitedCommand[] = [];
-  private _awaitedCommandTimeoutMS = 5000;
+  private _awaitedCommandTimeoutMS: number;
+  private _sendTimeoutMS: number;
+  /** Tail of the transaction queue, so only one send is in flight at a time. */
+  private _sendQueue: Promise<void> = Promise.resolve();
 
   private _printerOptions: Cmds.PrinterConfig;
   /** Gets the read-only copy of the current config of the printer. To modify use getConfigDocument. */
@@ -113,6 +125,10 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
     this._channelMessageTransformer = channelMessageTransformer;
     this._channelType = channelMessageType;
     this._deviceCommOpts = deviceCommunicationOptions;
+    // messageWaitTimeoutMS was previously declared but never read anywhere, so
+    // callers configuring it silently got the hardcoded default instead.
+    this._awaitedCommandTimeoutMS = deviceCommunicationOptions.messageWaitTimeoutMS ?? 5000;
+    this._sendTimeoutMS = deviceCommunicationOptions.messageWaitTimeoutMS ?? 5000;
     this._printerOptions = printerOptions ?? new Cmds.PrinterConfig();
   }
 
@@ -137,7 +153,7 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
   public override removeEventListener(
     type: string,
     callback: EventListenerOrEventListenerObject | null,
-    options?: boolean | EventListenerOptions | undefined
+    options?: boolean | EventListenerOptions  
   ): void {
     super.removeEventListener(type, callback, options);
   }
@@ -153,34 +169,51 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
     if (!this._channel.connected) {
       // If the channel failed to connect we have no hope.
       await this.dispose();
-      return false;
+      throw new Mux.DeviceNotReadyError(
+        'Channel was not connected when setting up the printer, cannot continue.'
+      );
     }
 
-    const devInfo = await this._channel.getDeviceInfo();
-    this._printerOptions.update(Cmds.deviceInfoToOptionsUpdate(devInfo));
+    try {
+      const devInfo = await this._channel.getDeviceInfo();
+      this._printerOptions.update(Cmds.deviceInfoToOptionsUpdate(devInfo));
 
-    this._streamListener = new Mux.InputMessageListener<TChannelType>(
-      this._channel.receive.bind(this._channel),
-      this.parseAndDispatchMessage.bind(this),
-      this.handleInputError.bind(this),
-      this._deviceCommOpts.debug,
-    );
-    this._streamListener.start();
+      this._streamListener = new Mux.InputMessageListener<TChannelType>(
+        this._channel.receive.bind(this._channel),
+        this.parseAndDispatchMessage.bind(this),
+        this.handleInputError.bind(this),
+        this._deviceCommOpts.debug,
+      );
+      this._streamListener.start();
 
-    this._commandSet = await this.detectLanguage(devInfo);
-    // Get the language-specific config object, which may have more options than
-    // the common config object.
-    this._printerOptions = this._commandSet.getConfig(this._printerOptions);
+      this._commandSet = await this.detectLanguage(devInfo);
+      // Get the language-specific config object, which may have more options than
+      // the common config object.
+      this._printerOptions = this._commandSet.getConfig(this._printerOptions);
 
-    // Now that we're listening for messages we can query for the full config.
-    await this.refreshPrinterConfiguration();
+      // Now that we're listening for messages we can query for the full config.
+      await this.refreshPrinterConfiguration();
+    } catch (e) {
+      // Without this the channel stays open with its USB interface claimed and
+      // the read loop still running, but nothing holds a reference to either.
+      // The interface can then never be released, and the next connect attempt
+      // fails to claim it - the printer cannot be re-added without a replug.
+      await this.dispose();
+      throw e;
+    }
 
     return true;
   }
 
   public async dispose() {
+    if (this._disposed) { return; }
     this._disposed = true;
     this._streamListener?.dispose();
+    // Anything waiting on a reply will never get one now, so settle it rather
+    // than making the caller sit through a full timeout for a disposed printer.
+    this.rejectAwaitedCommands(
+      new Mux.DeviceNotReadyError('Printer was disposed while awaiting a response.')
+    );
     await this._channel.dispose();
   }
 
@@ -190,19 +223,23 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
     // for reasons I can't figure out some printers will refuse to return
     // a valid config. Mostly EPL models.
     // Give it 3 chances before we give up.
-    let retryLimit = 3;
-    do {
-      retryLimit--;
+    const attemptLimit = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attemptLimit; attempt++) {
       try {
         await this.sendDocument(ReadyToPrintDocuments.getConfig);
         return this.printerOptions;
       }
       catch (e) {
-        this.logIfDebug(`Error trying to read printer config, trying ${retryLimit} more times.`, e);
+        lastError = e;
+        this.logIfDebug(`Error trying to read printer config on attempt ${attempt} of ${attemptLimit}.`, e);
       }
-    } while (retryLimit > 0);
+    }
 
-    throw new Mux.DeviceCommunicationError(`Tried ${retryLimit} times to read config and failed.`);
+    throw new Mux.DeviceCommunicationError(
+      `Tried ${attemptLimit} times to read config and failed.`,
+      lastError instanceof Error ? lastError : undefined
+    );
   }
 
   /** Send a document to the printer, applying the commands. */
@@ -251,9 +288,28 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
   private async sendTransactionAndWait(
     transaction: Docs.Transaction
   ): Promise<boolean> {
+    // Serialize transactions. `_awaitedCommands` is a single rendezvous slot
+    // between this method and the input listener, so two overlapping sends
+    // would clobber each other: the first send's awaiters are orphaned (never
+    // resolved, never rejected) and the second's cleanup wipes the slot, after
+    // which replies arrive with nothing to match against.
+    const previous = this._sendQueue;
+    let releaseQueue!: () => void;
+    this._sendQueue = new Promise<void>(resolve => { releaseQueue = resolve; });
+    await previous;
+    try {
+      return await this.sendTransactionAndWaitCore(transaction);
+    } finally {
+      releaseQueue();
+    }
+  }
+
+  private async sendTransactionAndWaitCore(
+    transaction: Docs.Transaction
+  ): Promise<boolean> {
     this._awaitedCommands = transaction.awaitedCommands.map(cmd => {
-      let awaitResolve;
-      let awaitReject;
+      let awaitResolve!: (value: boolean) => void;
+      let awaitReject!: (reason?: unknown) => void;
       const awaiter: Cmds.AwaitedCommand = {
         cmd,
         promise: new Promise<boolean>((resolve, reject) => {
@@ -263,6 +319,9 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
       };
       awaiter.reject = awaitReject;
       awaiter.resolve = awaitResolve;
+      // Nothing attaches a rejection handler until the Promise.all below, so
+      // without this an early rejection would surface as an unhandled rejection.
+      awaiter.promise.catch(() => { /* settled by rejectAwaitedCommands */ });
       return awaiter;
     });
 
@@ -285,11 +344,25 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
         break;
     }
 
-    await promiseWithTimeout(
-      this._channel.send(sendCmds),
-      5000,
-      new Mux.DeviceCommunicationError(`Timed out sending commands to printer, is there a problem with the printer?`)
-    );
+    // The channel reports write failures by RETURNING an error, it does not
+    // throw. Dropping that value means a write that never reached the device
+    // is followed by a full wait for a reply that can never come, so the user
+    // sees a timeout instead of the actual USB error.
+    let sendError: Mux.DeviceCommunicationError | undefined;
+    try {
+      sendError = await promiseWithTimeout(
+        this._channel.send(sendCmds),
+        this._sendTimeoutMS,
+        new Mux.DeviceCommunicationError(`Timed out sending commands to printer, is there a problem with the printer?`)
+      );
+    } catch (e) {
+      this.rejectAwaitedCommands(e);
+      throw e;
+    }
+    if (sendError !== undefined) {
+      this.rejectAwaitedCommands(sendError);
+      throw sendError;
+    }
 
     try {
       if (this._awaitedCommands.length > 0) {
@@ -301,23 +374,52 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
         );
       }
     }
+    catch (e) {
+      // Reject, don't just drop. Clearing the list alone leaves every awaiter
+      // pending forever for anything still holding one.
+      this.rejectAwaitedCommands(e);
+      throw e;
+    }
     finally {
       this._awaitedCommands = [];
     }
     return true;
   }
 
+  /** Settle every outstanding awaited command so nothing is left hanging. */
+  private rejectAwaitedCommands(reason: unknown) {
+    for (const awaited of this._awaitedCommands) {
+      awaited.reject?.(reason);
+    }
+    this._awaitedCommands = [];
+  }
+
   private async handleInputError(error: Mux.DeviceCommunicationError) {
-    // TODO: Something?
+    // The input listener does not restart after an error, so once we get here
+    // this printer can never receive another byte. Previously this only logged,
+    // which left `connected` reporting true on a printer that would time out
+    // every subsequent operation forever. Tear down instead, so callers get a
+    // prompt DeviceNotReadyError and the USB interface is actually released.
+    if (this._disposed) { return; }
+
     console.error("Printer saw error from InputListener!", error.message, error.innerException);
+    this.sendEvent('reportedError', {
+      messageType: 'ErrorMessage',
+      errors: new Cmds.ErrorStateSet([Cmds.ErrorState.MessageReceiveException]),
+      exceptions: [error],
+    });
+
+    await this.dispose();
   }
 
   private async parseAndDispatchMessage(
     input: TChannelType[]
   ): Promise<Mux.IHandlerResponse<TChannelType>> {
     if (this._commandSet === undefined) {
-      // TODO: Better option than hoping..
-      await new Promise(r => setTimeout(r, 500));
+      // We started listening before the command set was picked. Hold the data
+      // and let the listener come back to it; do NOT spin here. Returning the
+      // input unchanged after a sleep, in a loop with the listener, is an
+      // unbounded busy-wait with no bail-out.
       return { remainderData: input }
     }
 
@@ -332,6 +434,12 @@ export class ReceiptPrinter<TChannelType extends Conf.MessageArrayLike> extends 
     // Iterate through the response message and the command candidates in order,
     // but always validate the message is the format we wanted.
     const msg = this._channelMessageTransformer.combineMessages(...input);
+    this.logResultIfDebug(() => {
+      // Widened to the union: TChannelType does not narrow through a spread.
+      const raw: Conf.MessageArrayLike = msg;
+      const shown = typeof raw === 'string' ? raw : Util.asciiToDisplay(...raw);
+      return `Received ${msg.length} bytes: ${shown}`;
+    });
     const parsed = await Cmds.parseRaw(
       msg,
       this._commandSet,

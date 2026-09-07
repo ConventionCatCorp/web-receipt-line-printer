@@ -12,8 +12,34 @@ self.addEventListener('install', function(event) {
 self.addEventListener('activate', () => self.clients.claim());
 
 // Intercept fetch requests for modules and compile the intercepted typescript.
+// Whether a URL is one we're willing to intercept and compile.
+// Not just https: a service worker also runs on http://localhost and
+// http://127.0.0.1, because those are secure contexts. Testing the scheme alone
+// makes the whole demo silently do nothing when served locally over http - no
+// TypeScript is ever transpiled, so the page loads but none of its code runs.
+const isCompilableUrl = (url) => {
+    try {
+        const u = new URL(url);
+        if (u.protocol === 'https:') { return true; }
+        return u.protocol === 'http:'
+            && (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
+    } catch {
+        return false;
+    }
+};
+
+// Local development should always recompile rather than serve a stale build.
+const isLocalUrl = (url) => {
+    try {
+        const u = new URL(url);
+        return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+    } catch {
+        return false;
+    }
+};
+
 self.addEventListener('fetch', (event) => {
-    if (!event.request.url.startsWith('https://')) {
+    if (!isCompilableUrl(event.request.url)) {
         return;
     }
 
@@ -107,7 +133,7 @@ const transpileTypeScript = async (requestUrl) => {
     };
 
     const transpiledResponse = new Response(transpiledCode, responseOptions);
-    if (!requestUrl.startsWith('https://localhost') && requestUrl.startsWith('https://')) {
+    if (!isLocalUrl(requestUrl)) {
         typescriptCache.put(requestUrl, transpiledResponse.clone());
     }
 

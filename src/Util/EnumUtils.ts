@@ -6,5 +6,5 @@ export function hasFlag(val: number, flag: number) {
 }
 
 export function exhaustiveMatchGuard(_: never): never {
-  throw new Error('Invalid case received!' + _);
+  throw new Error(`Invalid case received! ${String(_)}`);
 }

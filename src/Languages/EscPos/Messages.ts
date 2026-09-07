@@ -4,18 +4,23 @@ import * as Cmds from '../../Commands/index.js';
 
 import { CmdSetAutoStatusBack } from './CmdSetAutoStatusBack.js';
 
-/* eslint-disable @typescript-eslint/no-duplicate-enum-values */
-export enum MessageCandidates {
-  Response = 0x00,
-  ASB2to4  = 0x00,
-  Realtime = 0x12,
-  AutoStat = 0x10,
-  Header   = 0x11,
+/**
+ * Recognizable first-byte patterns for messages the printer can send.
+ *
+ * A plain const object rather than an enum: these are compared against raw
+ * bytes read off the wire, and an enum would make every such comparison a
+ * mixed-type one. Several values deliberately coincide.
+ */
+export const MessageCandidates = {
+  Response: 0x00,
+  ASB2to4 : 0x00,
+  Realtime: 0x12,
+  AutoStat: 0x10,
+  Header  : 0x11,
   // Serial only
-  XON      = 0x11,
-  XOFF     = 0x13,
-}
-/* eslint-enable @typescript-eslint/no-duplicate-enum-values */
+  XON     : 0x11,
+  XOFF    : 0x13,
+} as const;
 
 type MessageCandidate = 'unknown' | 'response' | 'asb' | 'realtime' | 'header' |'xon' | 'xoff'
 
@@ -95,7 +100,7 @@ export function handleMessage<TReceived extends Conf.MessageArrayLike>(
   }
   const msg = Cmds.asUint8Array(message);
   let remainder = msg;
-  if (msg === undefined || msg.length === 0) { return result; }
+  if (msg.length === 0) { return result; }
   // There are several categories of messages ESC/POS can send. Broadly:
   // * Automatic Status Back (ASB) - Sent whenever the printer wants to.
   // * Real-time commands - Processed asap and responded to asap, blocking otherwise.
@@ -127,6 +132,26 @@ export function handleMessage<TReceived extends Conf.MessageArrayLike>(
       // We got a response to a sent command. To proceed we need to know what
       // question we asked. Response bytes don't contain enough info to tell.
       // If we don't know what we asked we can't process this command.
+      if (sentCommand === undefined) {
+        // This happens routinely: a reply that arrives after its command has
+        // already timed out, or after the awaited command list was cleared.
+        // We can't know how long the reply was, so drop a single byte to
+        // resynchronise. Consuming nothing would leave the byte at the head of
+        // the buffer forever, and every later parse would stall on it.
+        result.messages.push({
+          messageType: 'ErrorMessage',
+          errors: new Cmds.ErrorStateSet([Cmds.ErrorState.MessageReceiveException]),
+          exceptions: [
+            new Cmds.MessageParsingError(
+              `Received a command reply byte (${Util.hex(firstByte)}) while no command was awaiting one. It was probably a late reply to a command that already timed out. Dropping one byte to resynchronize.`,
+              msg,
+            )
+          ]
+        });
+        remainder = msg.slice(1);
+        break;
+      }
+
       const handled = cmdSet.callMessageHandler(msg, sentCommand);
       result.messages.push(...handled.messages);
       result.messageIncomplete = handled.messageIncomplete;

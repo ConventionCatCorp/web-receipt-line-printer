@@ -22,7 +22,15 @@
     "verbatimModuleSyntax": true,
     "noImplicitOverride": true,
     "incremental": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": [
+      "vitest/importMeta",
+      "w3c-web-usb"
+    ]
   },
   "include": [
     "src"

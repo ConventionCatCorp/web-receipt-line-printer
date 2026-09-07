@@ -25,7 +25,7 @@ export abstract class BasePrinterConfig implements IPrinterHardware, IPrinterMed
 
   public constructor() {}
 
-  protected _cpl: number = 42;
+  protected _cpl = 42;
   get charactersPerLine() { return this._cpl; }
 
   protected _hasMultiByteSupport = false;

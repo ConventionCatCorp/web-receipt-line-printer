@@ -1,8 +1,16 @@
 import * as Util from '../Util/index.js';
 
-/** Utility type to create an 'update' object, making all properties optional and not readonly. */
+/**
+ * Utility type to create an 'update' object, making all properties optional and
+ * not readonly.
+ *
+ * The explicit `| undefined` matters under exactOptionalPropertyTypes: an
+ * update is routinely built from a source that may not know a value yet (a USB
+ * descriptor string the device omitted, for instance), so "present but
+ * undefined" has to be assignable, not just "absent".
+ */
 export type UpdateFor<Type> = {
-  -readonly [Property in keyof Type]?: Type[Property];
+  -readonly [Property in keyof Type]?: Type[Property] | undefined;
 };
 
 /** The darkness of the printer setting, higher being printing darker. */
